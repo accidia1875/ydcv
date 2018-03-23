@@ -1,7 +1,9 @@
 #!/usr/bin/env python
+# encoding: utf-8
 from __future__ import unicode_literals
 from __future__ import print_function
 from argparse import ArgumentParser
+from hashlib import md5
 from subprocess import check_output
 from subprocess import call
 from subprocess import Popen
@@ -9,25 +11,22 @@ from time import sleep
 from distutils import spawn
 from tempfile import NamedTemporaryFile
 import json
+import random
 import re
 import sys
 import platform
 
 try:
     # Py3
-    from urllib.parse import quote
+    from urllib.parse import quote, urlencode
     from urllib.request import urlopen
 except ImportError:
     # Py 2.7
     from urllib import quote
     from urllib2 import urlopen
+    from urllib import urlencode
     reload(sys)
     sys.setdefaultencoding('utf8')
-
-
-API = "YouDaoCV"
-API_KEY = "659600698"
-
 
 class GlobalOptions(object):
     def __init__(self, options=None):
@@ -216,25 +215,67 @@ def print_explanation(data, options):
     print()
 
 
-def lookup_word(word):
-    word = quote(word)
+def lookup_word(unquted_word):
+    word = quote(unquted_word)
     if word == '%5Cq' or word == '%3Aq':
-        sys.exit("Thanks for using, goodbye!")
-    else:
-        pass
+        print("Thanks for using, goodbye!")
+        sys.exit()
+
     try:
-        data = urlopen(
-            "http://fanyi.youdao.com/openapi.do?keyfrom={0}&"
-            "key={1}&type=data&doctype=json&version=1.2&q={2}"
-            .format(API, API_KEY, word)).read().decode("utf-8")
-    except IOError:
-        print("Network is unavailable")
+        params = {
+            'q': word,
+            'from': 'EN',
+            'to': 'zh-CHS',
+            'appKey': options.appid,
+            'salt': random.randint(1, 65535),
+        }
+        params['sign'] = md5(
+            '{app_id}{q}{salt}{app_key}'.format(
+                app_id=options.appid, q=unquted_word, salt=params['salt'], app_key=options.appkey).encode('utf-8')
+        ).hexdigest()
+
+        query = urlencode(params)
+
+        resp = urlopen('http://openapi.youdao.com/api?%s' % query)
+
+    except IOError as err:
+        print(err)
     else:
-        print_explanation(json.loads(data), options)
+
+        json_data = json.loads(resp.read().decode('utf-8'))
+        err_code = json_data.get('errorCode')
+        if err_code == '0':
+            print_explanation(json_data, options)
+        else:
+            err_code_reason = '''
+            101 缺少必填的参数，出现这个情况还可能是et的值和实际加密方式不对应
+            102 不支持的语言类型
+            103 翻译文本过长
+            104 不支持的API类型
+            105 不支持的签名类型
+            106 不支持的响应类型
+            107 不支持的传输加密类型
+            108 appKey无效，注册账号， 登录后台创建应用和实例并完成绑定， 可获得应用ID和密钥等信息，其中应用ID就是appKey（ 注意不是应用密钥）
+            109 batchLog格式不正确
+            110 无相关服务的有效实例
+            111 开发者账号无效，可能是账号为欠费状态
+            201 解密失败，可能为DES,BASE64,URLDecode的错误
+            202 签名检验失败
+            203 访问IP地址不在可访问IP列表
+            301 辞典查询失败
+            302 翻译查询失败
+            303 服务端的其它异常
+            401 账户已经欠费停
+            '''
+            code_explain_list = [line.strip().split(' ', 1) for line in err_code_reason.split('\n') if line.strip()]
+            code_explain_dict = dict(code_explain_list)
+            print(code_explain_dict.get(err_code, '未知错误'))
 
 
 def arg_parse():
     parser = ArgumentParser(description="Youdao Console Version")
+    parser.add_argument('-i', '--appid', required=True, help='Application ID')
+    parser.add_argument('-k', '--appkey', required=True, help='Application Secret')
     parser.add_argument('-f', '--full',
                         action="store_true",
                         default=False,
